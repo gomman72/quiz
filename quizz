@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>넌센스 퀴즈 AI</title>
+<style>
+:root{--bg:#f6f4ff;--card:#fff;--tx:#1d1b2e;--mu:#6b6880;--ac:#6c4cff;--ac2:#ff5c8a;--ok:#12a36b;--bd:#e3dff5;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14122a;--card:#1f1c3a;--tx:#f1efff;--mu:#a39fc4;--bd:#34305a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14122a;--card:#1f1c3a;--tx:#f1efff;--mu:#a39fc4;--bd:#34305a;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;min-height:100vh}
+.w{max-width:520px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 2px}
+.sub{color:var(--mu);font-size:13px;margin-bottom:12px}
+.cam{position:relative;border-radius:20px;overflow:hidden;background:#000;aspect-ratio:4/3;border:2px solid var(--bd)}
+video{width:100%;height:100%;object-fit:cover;display:block}
+.scan{position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--ac2),transparent);top:0;display:none;animation:s 1.4s linear infinite}
+.busy .scan{display:block}
+@keyframes s{to{top:100%}}
+.badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;padding:4px 10px;border-radius:99px}
+.row{display:flex;gap:8px;margin-top:12px}
+button,.fl{flex:1;border:0;border-radius:14px;padding:14px 10px;font-size:15px;font-weight:700;cursor:pointer;background:var(--ac);color:#fff;text-align:center}
+button.g,.fl{background:var(--card);color:var(--tx);border:1px solid var(--bd)}
+button.on{background:var(--ok)}
+.res{margin-top:14px;background:var(--card);border:1px solid var(--bd);border-radius:20px;padding:18px;text-align:center}
+.q{font-size:14px;color:var(--mu);margin-bottom:8px;text-align:left}
+.num{font-size:84px;font-weight:900;line-height:1;background:linear-gradient(135deg,var(--ac),var(--ac2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.ans{font-size:18px;font-weight:700;margin-top:6px}
+.why{font-size:13px;color:var(--mu);margin-top:8px}
+.opts{text-align:left;margin-top:12px;font-size:14px}
+.opts div{padding:6px 10px;border-radius:10px;margin-top:4px;border:1px solid var(--bd)}
+.opts .hit{background:var(--ok);color:#fff;border-color:var(--ok);font-weight:700}
+.hist{margin-top:14px;font-size:12px;color:var(--mu)}
+.hist div{padding:6px 0;border-top:1px solid var(--bd)}
+.err{color:var(--ac2);font-size:13px;margin-top:10px;text-align:center}
+</style>
+</head>
+<body>
+<div class="w">
+  <h1>🧠 넌센스 퀴즈 AI</h1>
+  <div class="sub">문제를 카메라에 비추면 정답 번호를 소리로 알려줘요</div>
+  <div class="cam" id="cam">
+    <video id="v" autoplay playsinline muted></video>
+    <div class="scan"></div>
+    <div class="badge" id="badge">카메라 준비 중…</div>
+  </div>
+  <canvas id="c" hidden></canvas>
+  <select id="camSel" style="width:100%;margin-top:12px;padding:12px;border-radius:14px;border:1px solid var(--bd);background:var(--card);color:var(--tx);font-size:14px"><option value="">📹 카메라 선택 (자동)</option></select>
+  <button id="keyBtn" class="g" style="width:100%;margin-top:8px">🔑 무료 API 키 설정</button>
+  <div class="row">
+    <button id="snap">📸 지금 풀기</button>
+    <button id="auto" class="g">🔄 실시간 OFF</button>
+  </div>
+  <div class="row">
+    <button id="flip" class="g">↔️ 카메라 전환</button>
+    <label class="fl">📷 카메라로 찍기<input id="file" type="file" accept="image/*" capture="environment" hidden></label>
+  </div>
+  <div class="row">
+    <label class="fl">🖼 앨범에서 선택<input id="file2" type="file" accept="image/*" hidden></label>
+  </div>
+  <div id="out"></div>
+  <div class="err" id="err"></div>
+  <div class="hist" id="hist"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function getKey(){try{return localStorage.getItem('quizKey')||''}catch(e){return ''}}
+
+const v=$('v'),c=$('c'),out=$('out'),err=$('err'),badge=$('badge');
+let stable=false,solvedSig=null,sample=null,facing='environment',stream=null,auto=false,busy=false,lastSig=null,lastQ='',timer=null,hist=[];
+
+const PROMPT=`이미지는 한국어 넌센스 퀴즈 문제입니다(객관식일 수 있음).
+문제와 보기를 읽고 정답을 고르세요. 반드시 JSON만 출력:
+{"found":true|false,"question":"문제 요약","options":["보기1","보기2",...],"answer_number":정수(보기 번호, 보기가 없으면 0),"answer_text":"정답 내용","why":"한 줄 이유"}
+문제가 보이지 않거나 읽을 수 없으면 {"found":false}. 넌센스 퀴즈이므로 말장난·언어유희·상식 반전을 우선 고려하세요.`;
+
+async function init(){
+  sample={
+  limits:async()=>({images:true}),
+  json:async(prompt,opts)=>{
+    const key=getKey();
+    if(!key) throw {code:'nokey',message:'먼저 🔑 API 키를 입력해 주세요.'};
+    const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=rej;r.readAsDataURL(opts.images[0]);});
+    const resp=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',{method:'POST',
+      headers:{'content-type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify({contents:[{parts:[{inline_data:{mime_type:'image/jpeg',data:b64}},{text:prompt}]}],generationConfig:{responseMimeType:'application/json',temperature:0.2}})});
+    if(resp.status===429) throw {code:'rate_limited'};
+    if(resp.status===400||resp.status===403) throw {code:'auth',message:'API 키가 올바르지 않거나 권한이 없어요.'};
+    if(!resp.ok) throw {code:'http',message:'AI 요청 실패 ('+resp.status+')'};
+    const d=await resp.json();
+    const t=((d.candidates||[])[0]?.content?.parts||[]).map(x=>x.text||'').join('');
+    return JSON.parse(t.slice(t.indexOf('{'),t.lastIndexOf('}')+1));
+  }};
+  if(!getKey()) err.textContent='처음 한 번 🔑 API 키를 입력해 주세요.';
+  startCam();
+}
+async function startCam(){
+  try{
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    const id=$('camSel').value;
+    const vc=id?{deviceId:{exact:id},width:{ideal:1280}}:{facingMode:facing,width:{ideal:1280}};
+    stream=await navigator.mediaDevices.getUserMedia({video:vc,audio:false});
+    v.srcObject=stream; badge.textContent='문제를 비춰주세요';
+    listCams();
+  }catch(e){
+    badge.textContent='👆 화면을 탭하면 카메라가 켜져요';
+    $('cam').style.cursor='pointer';
+    $('cam').onclick=()=>$('file').click();
+    err.textContent='카메라 권한이 막혔어요. 아래 "사진 선택"으로 촬영/업로드하면 똑같이 풀어줘요.';
+  }
+}
+async function listCams(){
+  try{
+    const sel=$('camSel'),cur=(stream&&stream.getVideoTracks()[0].getSettings().deviceId)||sel.value;
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    sel.innerHTML='<option value="">📹 카메라 선택 (자동)</option>'+devs.map((d,i)=>`<option value="${d.deviceId}">${esc(d.label||('카메라 '+(i+1)))}</option>`).join('');
+    if(cur&&devs.some(d=>d.deviceId===cur))sel.value=cur;
+  }catch(e){}
+}
+$('camSel').onchange=()=>startCam();
+$('keyBtn').onclick=()=>{const k=prompt('Gemini API 키를 붙여넣어 주세요 (AIza...)',getKey());if(k!==null){try{localStorage.setItem('quizKey',k.trim())}catch(e){}err.textContent='키가 저장됐어요.'}};
+try{navigator.mediaDevices.addEventListener('devicechange',listCams)}catch(e){}
+function frameBlob(src,w){
+  return new Promise(res=>{
+    const sw=src.videoWidth||src.naturalWidth||src.width,sh=src.videoHeight||src.naturalHeight||src.height;
+    const r=Math.min(1,w/sw);c.width=sw*r;c.height=sh*r;
+    c.getContext('2d').drawImage(src,0,0,c.width,c.height);
+    c.toBlob(b=>res(b),'image/jpeg',.85);
+  });
+}
+function signature(){ // 화면 변화 감지용 8x8 썸네일
+  const t=document.createElement('canvas');t.width=t.height=8;
+  const x=t.getContext('2d');x.drawImage(v,0,0,8,8);
+  const d=x.getImageData(0,0,8,8).data,s=[];
+  for(let i=0;i<d.length;i+=4)s.push((d[i]+d[i+1]+d[i+2])/3);
+  return s;
+}
+function changed(a,b){ if(!a)return true; let n=0;for(let i=0;i<a.length;i++)n+=Math.abs(a[i]-b[i]);return n/a.length>9; }
+
+function speak(t){
+  try{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(t);u.lang='ko-KR';u.rate=1;
+    const ko=speechSynthesis.getVoices().find(x=>x.lang.startsWith('ko'));if(ko)u.voice=ko;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
+
+async function solve(blob){
+  if(busy||!sample)return; busy=true;$('cam').classList.add('busy');err.textContent='';
+  try{
+    const lim=await sample.limits();
+    if(!lim||!lim.images)throw {code:'noimg',message:'이미지 인식을 지원하지 않는 환경이에요.'};
+    const r=await sample.json(PROMPT,{images:[blob],modelTier:'quick',cache:false});
+    if(!r||!r.found){ if(!auto) err.textContent='문제를 찾지 못했어요. 글자가 잘 보이게 다시 비춰주세요.'; return; }
+    if(auto && r.question===lastQ) return; lastQ=r.question;
+    show(r);
+    const say=r.answer_number>0?`정답은 ${r.answer_number}번, ${r.answer_text||''} 입니다.`:`정답은 ${r.answer_text} 입니다.`;
+    speak(say);
+    hist.unshift(`${r.question} → ${r.answer_number>0?r.answer_number+'번 ':''}${r.answer_text||''}`);
+    $('hist').innerHTML=hist.slice(0,5).map(h=>`<div>${esc(h)}</div>`).join('');
+  }catch(e){
+    err.textContent=e&&e.code==='rate_limited'?'요청이 너무 빨라요. 잠시 후 다시!':(e&&e.message)||'인식에 실패했어요.';
+  }finally{busy=false;$('cam').classList.remove('busy')}
+}
+function show(r){
+  const opts=(r.options||[]).map((o,i)=>`<div class="${i+1===r.answer_number?'hit':''}">${i+1}. ${esc(o)}</div>`).join('');
+  out.innerHTML=`<div class="res"><div class="q">${esc(r.question)}</div>
+  ${r.answer_number>0?`<div class="num">${esc(r.answer_number)}번</div>`:''}
+  <div class="ans">${esc(r.answer_text)}</div><div class="why">💡 ${esc(r.why)}</div>
+  ${opts?`<div class="opts">${opts}</div>`:''}
+  <button style="margin-top:12px;width:100%" id="re">🔊 다시 듣기</button></div>`;
+  $('re').onclick=()=>speak(r.answer_number>0?`정답은 ${r.answer_number}번, ${r.answer_text} 입니다.`:`정답은 ${r.answer_text} 입니다.`);
+}
+
+$('snap').onclick=async()=>{ if(!v.videoWidth){err.textContent='카메라가 켜지지 않았어요.';return;} speak(''); lastQ=''; solve(await frameBlob(v,1024)); };
+$('flip').onclick=()=>{facing=facing==='environment'?'user':'environment';$('camSel').value='';startCam()};
+$('file2').onchange=$('file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const img=new Image();img.onload=async()=>{lastQ='';solve(await frameBlob(img,1024))};img.src=URL.createObjectURL(f);
+};
+$('auto').onclick=()=>{
+  auto=!auto;$('auto').textContent=auto?'🔄 실시간 ON':'🔄 실시간 OFF';$('auto').classList.toggle('on',auto);
+  clearInterval(timer);
+  if(auto){
+    badge.textContent='실시간 인식 중…';
+    timer=setInterval(async()=>{
+      if(busy||!v.videoWidth)return;
+      const s=signature(); // 화면이 바뀌고 안정되면(손떨림 끝) 인식
+      if(changed(lastSig,s)){ lastSig=s; stable=false; return; } // 움직이는 중
+      if(stable) return; // 이미 이 장면은 처리함
+      if(solvedSig&&!changed(solvedSig,s)) { stable=true; return; }
+      stable=true; solvedSig=s;
+      await solve(await frameBlob(v,1024));
+    },1800);
+  }else badge.textContent='문제를 비춰주세요';
+};
+speechSynthesis&&speechSynthesis.getVoices();
+init();
+</script>
+</body>
+</html>
